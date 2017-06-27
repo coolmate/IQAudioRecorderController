@@ -652,6 +652,44 @@
 
 #pragma mark - Audio Record
 
+
+-(void) startRecording{
+    //UI Update
+    {
+        //      [self setToolbarItems:@[_stopRecordingButton,_flexItem, _pauseRecordingButton,_flexItem, _cropOrDeleteButton] animated:YES];
+        
+        [self setToolbarItems:@[_flexItem,_stopRecordingButton,_flexItem] animated:YES];
+        _cropOrDeleteButton.enabled = NO;
+        [self.navigationItem setLeftBarButtonItem:_cancelRecordingButton animated:YES];
+        _doneButton.enabled = NO;
+    }
+    
+    /*
+     Create the recorder
+     */
+    if ([[NSFileManager defaultManager] fileExistsAtPath:_recordingFilePath])
+    {
+        [[NSFileManager defaultManager] removeItemAtPath:_recordingFilePath error:nil];
+    }
+    
+    _oldSessionCategory = [AVAudioSession sharedInstance].category;
+    [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryRecord error:nil];
+    [UIApplication sharedApplication].idleTimerDisabled = YES;
+    [_audioRecorder prepareToRecord];
+    
+    _isRecordingPaused = YES;
+    
+    if (self.maximumRecordDuration <=0)
+    {
+        [_audioRecorder record];
+    }
+    else
+    {
+        [_audioRecorder recordForDuration:self.maximumRecordDuration];
+    }
+}
+
+
 - (void)recordingButtonAction:(UIBarButtonItem *)item
 {
     //UI Update
