@@ -1,1019 +1,668 @@
 //
-// IQAudioRecorderController.m
-// https://github.com/hackiftekhar/IQAudioRecorderController
-// Created by Iftekhar Qurashi
-// Copyright (c) 2015-16 Iftekhar Qurashi
+//  ViewController.swift
+//  BarroLauncher
 //
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
+//  Created by David Liang on 11/09/2016.
+//  Copyright © 2016 David Liang. All rights reserved.
 //
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
 
+import UIKit
+import WebKit
+import AVFoundation
+import IQAudioRecorderController
+import Alamofire
+import Toaster
+import AudioPlayer
+import Whisper
 
-#import "IQAudioRecorderViewController.h"
-#import "NSString+IQTimeIntervalFormatter.h"
-#import "IQPlaybackDurationView.h"
-#import "IQMessageDisplayView.h"
-#import "SCSiriWaveformView.h"
-#import "IQAudioCropperViewController.h"
-
-#import <AVFoundation/AVFoundation.h>
-
-/************************************/
-
-@interface IQAudioRecorderViewController() <AVAudioRecorderDelegate,AVAudioPlayerDelegate,IQPlaybackDurationViewDelegate,IQMessageDisplayViewDelegate,IQAudioCropperViewControllerDelegate>
-{
-    //BlurrView
-    UIVisualEffectView *visualEffectView;
-    BOOL _isFirstTime;
+class BarroViewController: UIViewController, IQAudioRecorderViewControllerDelegate, WKNavigationDelegate,WKScriptMessageHandler {
     
-    //Recording...
-    AVAudioRecorder *_audioRecorder;
-    SCSiriWaveformView *musicFlowView;
-    NSString *_recordingFilePath;
-    CADisplayLink *meterUpdateDisplayLink;
     
-    //Playing
-    AVAudioPlayer *_audioPlayer;
-    BOOL _wasPlaying;
-    IQPlaybackDurationView *_viewPlayerDuration;
-    CADisplayLink *playProgressDisplayLink;
-
-    //Navigation Bar
-    NSString *_navigationTitle;
-    UIBarButtonItem *_cancelButton;
-    UIBarButtonItem *_doneButton;
-    
-    //Stop Recording Button
-    UIButton *btnStopRec;
-    
-    //Toolbar
-    UIBarButtonItem *_flexItem;
-
-    //Playing controls
-    UIBarButtonItem *_playButton;
-    UIBarButtonItem *_pauseButton;
-    UIBarButtonItem *_stopPlayButton;
-
-    //Recording controls
-    BOOL _isRecordingPaused;
-    UIBarButtonItem *_cancelRecordingButton;
-    UIBarButtonItem *_startRecordingButton;
-    UIBarButtonItem *_continueRecordingButton;
-    UIBarButtonItem *_pauseRecordingButton;
-    UIBarButtonItem *_stopRecordingButton;
-    
-    //Crop/Delete controls
-    UIBarButtonItem *_cropOrDeleteButton;
-    
-    //Access
-    IQMessageDisplayView *viewMicrophoneDenied;
-    
-    //Private variables
-    NSString *_oldSessionCategory;
-    BOOL _wasIdleTimerDisabled;
-}
-
-@property(nonatomic, assign) BOOL blurrEnabled;
-
-@end
-
-@implementation IQAudioRecorderViewController
-
-@dynamic title;
-
-#pragma mark - Private Helper
-
--(void)setNormalTintColor:(UIColor *)normalTintColor
-{
-    _normalTintColor = normalTintColor;
-
-    _playButton.tintColor = [self _normalTintColor];
-    _pauseButton.tintColor = [self _normalTintColor];
-    _stopPlayButton.tintColor = [self _normalTintColor];
-    _startRecordingButton.tintColor = [self _normalTintColor];
-    _cropOrDeleteButton.tintColor = [self _normalTintColor];
-}
-
--(UIColor*)_normalTintColor
-{
-    if (_normalTintColor)
-    {
-        return _normalTintColor;
-    }
-    else
-    {
-        if (self.barStyle == UIBarStyleDefault)
-        {
-            return [UIColor colorWithRed:0 green:0.5 blue:1.0 alpha:1.0];
-        }
-        else
-        {
-            return [UIColor whiteColor];
-        }
-    }
-}
-
--(void)setHighlightedTintColor:(UIColor *)highlightedTintColor
-{
-    _highlightedTintColor = highlightedTintColor;
-    _viewPlayerDuration.tintColor = [self _highlightedTintColor];
-    _cancelRecordingButton.tintColor = [self _highlightedTintColor];
-}
-
--(UIColor *)_highlightedTintColor
-{
-    if (_highlightedTintColor)
-    {
-        return _highlightedTintColor;
-    }
-    else
-    {
-        if (self.barStyle == UIBarStyleDefault)
-        {
-            return [UIColor colorWithRed:255.0/255.0 green:64.0/255.0 blue:64.0/255.0 alpha:1.0];
-        }
-        else
-        {
-            return [UIColor colorWithRed:0 green:0.5 blue:1.0 alpha:1.0];
-        }
-    }
-}
-
-#pragma mark - View Lifecycle
-
--(void)loadView
-{
-    visualEffectView = [[UIVisualEffectView alloc] initWithEffect:nil];
-    visualEffectView.frame = [UIScreen mainScreen].bounds;
-    
-    self.view = visualEffectView;
-}
-
-- (void)viewDidLoad
-{
-    [super viewDidLoad];
-
-    _isFirstTime = YES;
-    
-    if (self.title.length == 0)
-    {
-        _navigationTitle = @"Barro Voice Message Recorder";
-    }
-    else
-    {
-        _navigationTitle = self.title;
-    }
-
-    
-    {
-        viewMicrophoneDenied = [[IQMessageDisplayView alloc] initWithFrame:visualEffectView.contentView.bounds];
-        viewMicrophoneDenied.translatesAutoresizingMaskIntoConstraints = NO;
-        viewMicrophoneDenied.delegate = self;
-        viewMicrophoneDenied.alpha = 0.0;
-        
-        if (self.barStyle == UIBarStyleDefault)
-        {
-            viewMicrophoneDenied.tintColor = [UIColor darkGrayColor];
-        }
-        else
-        {
-            viewMicrophoneDenied.tintColor = [UIColor whiteColor];
-        }
-        
-        NSBundle* bundle = [NSBundle bundleForClass:self.class];
-
-        viewMicrophoneDenied.image = [[UIImage imageNamed:@"microphone_access" inBundle:bundle compatibleWithTraitCollection:nil] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
-        viewMicrophoneDenied.title = @"Microphone Access Denied!";
-        viewMicrophoneDenied.message = @"Unable to access microphone. Please enable microphone access in Settings.";
-        viewMicrophoneDenied.buttonTitle = @"Go to Settings";
-        [visualEffectView.contentView addSubview:viewMicrophoneDenied];
-        
+    override var prefersStatusBarHidden: Bool {
+        return true
     }
     
-    {
-        musicFlowView = [[SCSiriWaveformView alloc] initWithFrame:visualEffectView.contentView.bounds];
-        musicFlowView.translatesAutoresizingMaskIntoConstraints = NO;
-        musicFlowView.alpha = 0.0;
-        musicFlowView.backgroundColor = [UIColor clearColor];
-        [visualEffectView.contentView addSubview:musicFlowView];
+    func udocs_hide_navbar(){
+        self.navigationController?.isNavigationBarHidden = true
     }
     
-    {
-        NSLayoutConstraint *constraintRatio = [NSLayoutConstraint constraintWithItem:musicFlowView attribute:NSLayoutAttributeWidth relatedBy:NSLayoutRelationEqual toItem:musicFlowView attribute:NSLayoutAttributeHeight multiplier:1.0 constant:0];
-        
-        NSLayoutConstraint *constraintCenterX = [NSLayoutConstraint constraintWithItem:musicFlowView attribute:NSLayoutAttributeCenterX relatedBy:NSLayoutRelationEqual toItem:visualEffectView.contentView attribute:NSLayoutAttributeCenterX multiplier:1.0 constant:0];
-        
-        NSLayoutConstraint *constraintCenterY = [NSLayoutConstraint constraintWithItem:musicFlowView attribute:NSLayoutAttributeCenterY relatedBy:NSLayoutRelationEqual toItem:visualEffectView.contentView attribute:NSLayoutAttributeCenterY multiplier:1.0 constant:0];
-        
-        NSLayoutConstraint *constraintWidth = [NSLayoutConstraint constraintWithItem:musicFlowView attribute:NSLayoutAttributeWidth relatedBy:NSLayoutRelationEqual toItem:visualEffectView.contentView attribute:NSLayoutAttributeWidth multiplier:1.0 constant:0];
-        [musicFlowView addConstraint:constraintRatio];
-        [visualEffectView.contentView addConstraints:@[constraintWidth,constraintCenterX,constraintCenterY]];
-    }
-
-    {
-        NSLayoutConstraint *constraintCenterX = [NSLayoutConstraint constraintWithItem:viewMicrophoneDenied attribute:NSLayoutAttributeCenterX relatedBy:NSLayoutRelationEqual toItem:visualEffectView.contentView attribute:NSLayoutAttributeCenterX multiplier:1.0 constant:0];
-        
-        NSLayoutConstraint *constraintCenterY = [NSLayoutConstraint constraintWithItem:viewMicrophoneDenied attribute:NSLayoutAttributeCenterY relatedBy:NSLayoutRelationEqual toItem:visualEffectView.contentView attribute:NSLayoutAttributeCenterY multiplier:1.0 constant:0];
-        
-        NSLayoutConstraint *constraintWidth = [NSLayoutConstraint constraintWithItem:viewMicrophoneDenied attribute:NSLayoutAttributeWidth relatedBy:NSLayoutRelationEqual toItem:visualEffectView.contentView attribute:NSLayoutAttributeWidth multiplier:1.0 constant:-20];
-        [visualEffectView.contentView addConstraints:@[constraintWidth,constraintCenterX,constraintCenterY]];
+    func udocs_show_navbar(){
+        self.navigationController?.isNavigationBarHidden = false
     }
     
-    
-    {
-        _flexItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
-        
-        NSBundle* bundle = [NSBundle bundleForClass:self.class];
-        //Recording controls
-        _startRecordingButton = [[UIBarButtonItem alloc] initWithImage:[UIImage imageNamed:@"audio_record" inBundle:bundle compatibleWithTraitCollection:nil] style:UIBarButtonItemStylePlain target:self action:@selector(recordingButtonAction:)];
-        _startRecordingButton.tintColor = [self _normalTintColor];
-        _pauseRecordingButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemPause target:self action:@selector(pauseRecordingButtonAction:)];
-        _pauseRecordingButton.tintColor = [UIColor redColor];
-        _continueRecordingButton = [[UIBarButtonItem alloc] initWithImage:[UIImage imageNamed:@"audio_record" inBundle:bundle compatibleWithTraitCollection:nil] style:UIBarButtonItemStylePlain target:self action:@selector(continueRecordingButtonAction:)];
-        _continueRecordingButton.tintColor = [UIColor redColor];
-        _stopRecordingButton = [[UIBarButtonItem alloc] initWithImage:[UIImage imageNamed:@"stop_recording" inBundle:bundle compatibleWithTraitCollection:nil] style:UIBarButtonItemStylePlain target:self action:@selector(stopRecordingButtonAction:)];
-        
-        _stopRecordingButton.tintColor = [UIColor redColor];
-        _cancelRecordingButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCancel target:self action:@selector(cancelRecordingAction:)];
-        _cancelRecordingButton.tintColor = [self _highlightedTintColor];
-        
-        //Playing controls
-        /*
-        _stopPlayButton = [[UIBarButtonItem alloc] initWithImage:[UIImage imageNamed:@"stop_playing" inBundle:bundle compatibleWithTraitCollection:nil] style:UIBarButtonItemStylePlain target:self action:@selector(stopPlayingButtonAction:)];
-        _stopPlayButton.tintColor = [self _normalTintColor];
-        */
-        _stopRecordingButton = [[UIBarButtonItem alloc] initWithTitle:@"Stop & Send" style:UIBarButtonSystemItemStop target:self action:@selector(stopRecordingButtonAction:)];
-        _stopRecordingButton.tintColor = [UIColor redColor];
-        
-        
-        _playButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemPlay target:self action:@selector(playAction:)];
-        _playButton.tintColor = [self _normalTintColor];
-
-        _pauseButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemPause target:self action:@selector(pausePlayingAction:)];
-        _pauseButton.tintColor = [self _normalTintColor];
-
-        //crop/delete control
-        
-        if (self.allowCropping)
-        {
-            _cropOrDeleteButton = [[UIBarButtonItem alloc] initWithImage:[UIImage imageNamed:@"scissor" inBundle:bundle compatibleWithTraitCollection:nil] style:UIBarButtonItemStylePlain target:self action:@selector(cropAction:)];
-        }
-        else
-        {
-            _cropOrDeleteButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemTrash target:self action:@selector(deleteAction:)];
-        }
-        
-        _cropOrDeleteButton.tintColor = [self _normalTintColor];
-        
-        [self setToolbarItems:@[_playButton,_flexItem, _startRecordingButton,_flexItem, _cropOrDeleteButton] animated:NO];
-
-        _playButton.enabled = NO;
-        _cropOrDeleteButton.enabled = NO;
-    }
-    
-    // Define the recorder setting
-    {
-        NSMutableDictionary *recordSettings = [[NSMutableDictionary alloc] init];
-
-        NSString *globallyUniqueString = [NSProcessInfo processInfo].globallyUniqueString;
-
-        if (self.audioFormat == IQAudioFormatDefault || self.audioFormat == IQAudioFormat_m4a)
-        {
-            _recordingFilePath = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.m4a",globallyUniqueString]];
-
-            recordSettings[AVFormatIDKey] = @(kAudioFormatMPEG4AAC);
-        }
-        else if (self.audioFormat == IQAudioFormat_caf)
-        {
-            _recordingFilePath = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.caf",globallyUniqueString]];
-
-            recordSettings[AVFormatIDKey] = @(kAudioFormatAppleLossless);
-        }
-        /*
-        if (self.sampleRate > 0.0f)
-        {
-            recordSettings[AVSampleRateKey] = @(self.sampleRate);
-        }
-        else
-        {
-            recordSettings[AVSampleRateKey] = @44100.0f;
-        }
-         */
-        recordSettings[AVSampleRateKey] = @8000.0f;
-        
-        if (self.numberOfChannels >0)
-        {
-            recordSettings[AVNumberOfChannelsKey] = @(self.numberOfChannels);
-        }
-        else
-        {
-            recordSettings[AVNumberOfChannelsKey] = @1;
-        }
-
-        if (self.audioQuality != IQAudioQualityDefault)
-        {
-            recordSettings[AVEncoderAudioQualityKey] = @(self.audioQuality);
-        }
-
-        if (self.bitRate > 0)
-        {
-            recordSettings[AVEncoderBitRateKey] = @(self.bitRate);
-        }
-        
-        // Initiate and prepare the recorder
-        _audioRecorder = [[AVAudioRecorder alloc] initWithURL:[NSURL fileURLWithPath:_recordingFilePath] settings:recordSettings error:nil];
-        _audioRecorder.delegate = self;
-        _audioRecorder.meteringEnabled = YES;
-        
-        musicFlowView.primaryWaveLineWidth = 3.0f;
-        musicFlowView.secondaryWaveLineWidth = 1.0;
-    }
-
-    //Navigation Bar Settings
-    {
-        if (self.title.length == 0 && self.navigationItem.title.length == 0)
-        {
-            self.navigationItem.title = @"Audio Recorder";
-        }
-
-        _cancelButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCancel target:self action:@selector(cancelAction:)];
-        self.navigationItem.leftBarButtonItem = _cancelButton;
-        _doneButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self action:@selector(doneAction:)];
-        _doneButton.enabled = NO;
-        //self.navigationItem.rightBarButtonItem = _doneButton;
-    }
-    
-    //Player Duration View
-    {
-        _viewPlayerDuration = [[IQPlaybackDurationView alloc] init];
-        _viewPlayerDuration.delegate = self;
-        _viewPlayerDuration.tintColor = [self _highlightedTintColor];
-        _viewPlayerDuration.autoresizingMask = UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
-        _viewPlayerDuration.backgroundColor = [UIColor clearColor];
-    }
-    
-    [self startRecording];
-}
-
--(void)setBarStyle:(UIBarStyle)barStyle
-{
-    _barStyle = barStyle;
-    
-    if (self.barStyle == UIBarStyleDefault)
-    {
-        self.navigationController.navigationBar.barStyle = UIBarStyleDefault;
-        self.navigationController.toolbar.barStyle = UIBarStyleDefault;
-        self.navigationController.navigationBar.tintColor = [self _normalTintColor];
-        self.navigationController.toolbar.tintColor = [self _normalTintColor];
-    }
-    else
-    {
-        self.navigationController.navigationBar.barStyle = UIBarStyleBlack;
-        self.navigationController.toolbar.barStyle = UIBarStyleBlack;
-        self.navigationController.navigationBar.tintColor = [UIColor whiteColor];
-        self.navigationController.toolbar.tintColor = [UIColor whiteColor];
-    }
-
-    viewMicrophoneDenied.tintColor = [self _normalTintColor];
-    self.view.tintColor = [self _normalTintColor];
-    self.highlightedTintColor = self.highlightedTintColor;
-    self.normalTintColor = self.normalTintColor;
-}
-
--(void)viewWillAppear:(BOOL)animated
-{
-    [super viewWillAppear:animated];
-    
-    [self startUpdatingMeter];
-    
-    _wasIdleTimerDisabled = [[UIApplication sharedApplication] isIdleTimerDisabled];
-    
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(didBecomeActiveNotification:) name:UIApplicationDidBecomeActiveNotification object:nil];
-    [self validateMicrophoneAccess];
-    
-    if (_isFirstTime)
-    {
-        _isFirstTime = NO;
-
-        if (self.blurrEnabled)
-        {
-                if (self.barStyle == UIBarStyleDefault)
-                {
-                    visualEffectView.effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleExtraLight];
-                }
-                else
-                {
-                    visualEffectView.effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleDark];
-                }
-        }
-        else
-        {
-            if (self.barStyle == UIBarStyleDefault)
-            {
-                self.view.backgroundColor = [UIColor whiteColor];
-            }
-            else
-            {
-                self.view.backgroundColor = [UIColor darkGrayColor];
-            }
+    func udocs_toggle_navbar(){
+        if(self.navigationController?.isNavigationBarHidden)!{
+            self.udocs_show_navbar()
+        }else{
+            self.udocs_hide_navbar()
         }
     }
     
-    //-- Custom Stop button
-    btnStopRec = [UIButton buttonWithType:UIButtonTypeCustom];
-    [btnStopRec addTarget:self
-                   action:@selector(stopRecording)
-         forControlEvents:UIControlEventTouchUpInside];
-    [btnStopRec setTitle:@"Send" forState:UIControlStateNormal];
-    btnStopRec.frame = CGRectMake(0.0, 610.0, self.view.frame.size.width, 100.0);
-    [btnStopRec setBackgroundColor:[UIColor colorWithRed:204.0f/255.0f green:204.0f/255.0f blue:204.0f/255.0f alpha:0.3f]];
-    btnStopRec.titleLabel.font = [UIFont systemFontOfSize:40.0 weight:200.0];
-    //btnStopRec.layer.cornerRadius = 5;
-    [btnStopRec setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    [btnStopRec setTitleColor:[UIColor darkGrayColor] forState:UIControlEventTouchDown];
-    
-    [self.view addSubview:btnStopRec];
-}
-
--(void)viewWillDisappear:(BOOL)animated
-{
-    [super viewWillDisappear:animated];
-    
-    [[NSNotificationCenter defaultCenter] removeObserver:self name:UIApplicationDidBecomeActiveNotification object:nil];
-    
-    _audioPlayer.delegate = nil;
-    [_audioPlayer stop];
-    _audioPlayer = nil;
-    
-    _audioRecorder.delegate = nil;
-    [_audioRecorder stop];
-    _audioRecorder = nil;
-    
-    [self stopUpdatingMeter];
-    
-    [UIApplication sharedApplication].idleTimerDisabled = _wasIdleTimerDisabled;
-}
-
-#pragma mark - Update Meters
-
-- (void)updateMeters
-{
-    if (_audioRecorder.isRecording || _isRecordingPaused)
-    {
-        [_audioRecorder updateMeters];
-        
-        CGFloat normalizedValue = pow (10, [_audioRecorder averagePowerForChannel:0] / 20);
-        
-        musicFlowView.waveColor = [self _highlightedTintColor];
-        [musicFlowView updateWithLevel:normalizedValue];
-        
-        self.navigationItem.title = [NSString timeStringForTimeInterval:_audioRecorder.currentTime];
-    }
-    else if (_audioPlayer)
-    {
-        if (_audioPlayer.isPlaying)
-        {
-            [_audioPlayer updateMeters];
-            CGFloat normalizedValue = pow (10, [_audioPlayer averagePowerForChannel:0] / 20);
-            [musicFlowView updateWithLevel:normalizedValue];
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        if(self.fullScreen){
+            self.udocs_hide_navbar()
         }
-
-        musicFlowView.waveColor = [self _highlightedTintColor];
-    }
-    else
-    {
-        musicFlowView.waveColor = [self _normalTintColor];
-        [musicFlowView updateWithLevel:0];
-    }
-}
-
--(void)startUpdatingMeter
-{
-    [meterUpdateDisplayLink invalidate];
-    meterUpdateDisplayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(updateMeters)];
-    [meterUpdateDisplayLink addToRunLoop:[NSRunLoop currentRunLoop] forMode:NSRunLoopCommonModes];
-}
-
--(void)stopUpdatingMeter
-{
-    [meterUpdateDisplayLink invalidate];
-    meterUpdateDisplayLink = nil;
-}
-
-#pragma mark - Audio Play
-
--(void)updatePlayProgress
-{
-    [_viewPlayerDuration setCurrentTime:_audioPlayer.currentTime animated:YES];
-}
-
-- (void)playbackDurationView:(IQPlaybackDurationView *)playbackView didStartScrubbingAtTime:(NSTimeInterval)time
-{
-    _wasPlaying = _audioPlayer.isPlaying;
-    
-    if (_audioPlayer.isPlaying)
-    {
-        [_audioPlayer pause];
-    }
-}
-- (void)playbackDurationView:(IQPlaybackDurationView *)playbackView didScrubToTime:(NSTimeInterval)time
-{
-    _audioPlayer.currentTime = time;
-}
-
-- (void)playbackDurationView:(IQPlaybackDurationView *)playbackView didEndScrubbingAtTime:(NSTimeInterval)time
-{
-    if (_wasPlaying)
-    {
-        [_audioPlayer play];
-    }
-}
-
-- (void)playAction:(UIBarButtonItem *)item
-{
-    _oldSessionCategory = [AVAudioSession sharedInstance].category;
-    [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback error:nil];
-    [UIApplication sharedApplication].idleTimerDisabled = YES;
-
-    if (_audioPlayer == nil)
-    {
-        _audioPlayer = [[AVAudioPlayer alloc] initWithContentsOfURL:[NSURL fileURLWithPath:_recordingFilePath] error:nil];
-        _audioPlayer.delegate = self;
-        _audioPlayer.meteringEnabled = YES;
-    }
-    
-    [_audioPlayer prepareToPlay];
-    [_audioPlayer play];
-    
-    //UI Update
-    {
-        [self setToolbarItems:@[_pauseButton,_flexItem, _stopPlayButton,_flexItem, _cropOrDeleteButton] animated:YES];
-        [self showNavigationButton:NO];
-        _cropOrDeleteButton.enabled = NO;
-    }
-    
-    //Start regular update
-    {
-        _viewPlayerDuration.duration = _audioPlayer.duration;
-        _viewPlayerDuration.currentTime = _audioPlayer.currentTime;
-        _viewPlayerDuration.frame = self.navigationController.navigationBar.bounds;
         
+    }
+
+    var urlBase = "http://win.udocscloud.com:8899"
+    var fullScreen = false
+
+    func audioRecorderController(_ controller: IQAudioRecorderViewController, didFinishWithAudioAtPath filePath: String) {
         
-        [_viewPlayerDuration setNeedsLayout];
-        [_viewPlayerDuration layoutIfNeeded];
-        
-        self.navigationItem.titleView = _viewPlayerDuration;
-        
-        _viewPlayerDuration.alpha = 0.0;
-        [UIView animateWithDuration:0.2 delay:0.1 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
-            _viewPlayerDuration.alpha = 1.0;
-        } completion:^(BOOL finished) {
-        }];
-        
-        [playProgressDisplayLink invalidate];
-        playProgressDisplayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(updatePlayProgress)];
-        [playProgressDisplayLink addToRunLoop:[NSRunLoop currentRunLoop] forMode:NSRunLoopCommonModes];
-    }
-}
+        let audioFileURL = URL(fileURLWithPath: filePath)
 
--(void)pausePlayingAction:(UIBarButtonItem*)item
-{
-    //UI Update
-    {
-        [self setToolbarItems:@[_playButton,_flexItem, _stopPlayButton,_flexItem, _cropOrDeleteButton] animated:YES];
-    }
-    
-    [_audioPlayer pause];
-    
-    [[AVAudioSession sharedInstance] setCategory:_oldSessionCategory error:nil];
-    [UIApplication sharedApplication].idleTimerDisabled = _wasIdleTimerDisabled;
-}
-
--(void)stopPlayingButtonAction:(UIBarButtonItem*)item
-{
-    //UI Update
-    {
-        /*
-        [self setToolbarItems:@[_playButton,_flexItem, _startRecordingButton,_flexItem, _cropOrDeleteButton] animated:YES];
-        _cropOrDeleteButton.enabled = YES;
-         */
-        [self setToolbarItems:@[_flexItem,_stopRecordingButton,_flexItem] animated:YES];
-        _cropOrDeleteButton.enabled = NO;
-        [self.navigationItem setLeftBarButtonItem:_cancelRecordingButton animated:YES];
-        _doneButton.enabled = NO;
-    }
-    
-    {
-        [playProgressDisplayLink invalidate];
-        playProgressDisplayLink = nil;
-        
-        [UIView animateWithDuration:0.1 animations:^{
-            _viewPlayerDuration.alpha = 0.0;
-        } completion:^(BOOL finished) {
-            self.navigationItem.titleView = nil;
-            [self showNavigationButton:YES];
-        }];
-    }
-    
-    _audioPlayer.delegate = nil;
-    [_audioPlayer stop];
-    _audioPlayer = nil;
-    
-    [[AVAudioSession sharedInstance] setCategory:_oldSessionCategory error:nil];
-    [UIApplication sharedApplication].idleTimerDisabled = _wasIdleTimerDisabled;
-}
-
-#pragma mark - AVAudioPlayerDelegate
-/*
- Occurs when the audio player instance completes playback
- */
--(void)audioPlayerDidFinishPlaying:(AVAudioPlayer *)player successfully:(BOOL)flag
-{
-    //To update UI on stop playing
-    NSInvocation *invocation = [NSInvocation invocationWithMethodSignature:[_stopPlayButton.target methodSignatureForSelector:_stopPlayButton.action]];
-    invocation.target = _stopPlayButton.target;
-    invocation.selector = _stopPlayButton.action;
-    [invocation invoke];
-}
-
-#pragma mark - Audio Record
-
-
--(void) startRecording{
-    //UI Update
-    {
-        //      [self setToolbarItems:@[_stopRecordingButton,_flexItem, _pauseRecordingButton,_flexItem, _cropOrDeleteButton] animated:YES];
-        
-        [self setToolbarItems:@[_flexItem,_stopRecordingButton,_flexItem] animated:YES];
-        _cropOrDeleteButton.enabled = NO;
-        [self.navigationItem setLeftBarButtonItem:_cancelRecordingButton animated:YES];
-        _doneButton.enabled = NO;
-    }
-    
-    /*
-     Create the recorder
-     */
-    if ([[NSFileManager defaultManager] fileExistsAtPath:_recordingFilePath])
-    {
-        [[NSFileManager defaultManager] removeItemAtPath:_recordingFilePath error:nil];
-    }
-    
-    _oldSessionCategory = [AVAudioSession sharedInstance].category;
-    [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryRecord error:nil];
-    [UIApplication sharedApplication].idleTimerDisabled = YES;
-    [_audioRecorder prepareToRecord];
-    
-    _isRecordingPaused = YES;
-    
-    if (self.maximumRecordDuration <=0)
-    {
-        [_audioRecorder record];
-    }
-    else
-    {
-        [_audioRecorder recordForDuration:self.maximumRecordDuration];
-    }
-}
-
-
-- (void)recordingButtonAction:(UIBarButtonItem *)item
-{
-    //UI Update
-    {
-        [self setToolbarItems:@[_stopRecordingButton,_flexItem, _pauseRecordingButton,_flexItem, _cropOrDeleteButton] animated:YES];
-        _cropOrDeleteButton.enabled = NO;
-        [self.navigationItem setLeftBarButtonItem:_cancelRecordingButton animated:YES];
-        _doneButton.enabled = NO;
-    }
-    
-    /*
-     Create the recorder
-     */
-    if ([[NSFileManager defaultManager] fileExistsAtPath:_recordingFilePath])
-    {
-        [[NSFileManager defaultManager] removeItemAtPath:_recordingFilePath error:nil];
-    }
-    
-    _oldSessionCategory = [AVAudioSession sharedInstance].category;
-    [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryRecord error:nil];
-    [UIApplication sharedApplication].idleTimerDisabled = YES;
-    [_audioRecorder prepareToRecord];
-    
-    _isRecordingPaused = YES;
-    
-    if (self.maximumRecordDuration <=0)
-    {
-        [_audioRecorder record];
-    }
-    else
-    {
-        [_audioRecorder recordForDuration:self.maximumRecordDuration];
-    }
-}
-
-- (void)continueRecordingButtonAction:(UIBarButtonItem *)item
-{
-    //UI Update
-    {
-        [self setToolbarItems:@[_stopRecordingButton,_flexItem, _pauseRecordingButton,_flexItem, _cropOrDeleteButton] animated:YES];
-    }
-
-    _isRecordingPaused = NO;
-    [_audioRecorder record];
-}
-
--(void)pauseRecordingButtonAction:(UIBarButtonItem*)item
-{
-    _isRecordingPaused = YES;
-    [_audioRecorder pause];
-    [self setToolbarItems:@[_stopRecordingButton,_flexItem, _continueRecordingButton,_flexItem, _cropOrDeleteButton] animated:YES];
-}
-
--(void)stopRecordingButtonAction:(UIBarButtonItem*)item
-{
-    /*
-    _isRecordingPaused = NO;
-    [_audioRecorder stop];
-     */
-    [self stopRecording];
-}
-
--(void) stopRecording
-{
-    _isRecordingPaused = NO;
-    [_audioRecorder stop];
-    
-    [self done];
-}
-
--(void)cancelRecordingAction:(UIBarButtonItem*)item
-{
-    _isRecordingPaused = NO;
-    [_audioRecorder stop];
-    
-    [[NSFileManager defaultManager] removeItemAtPath:_recordingFilePath error:nil];
-    self.navigationItem.title = [NSString timeStringForTimeInterval:_audioRecorder.currentTime];
-}
-
-#pragma mark - AVAudioRecorderDelegate
-
-- (void)audioRecorderDidFinishRecording:(AVAudioRecorder *)recorder successfully:(BOOL)flag
-{
-    if (flag)
-    {
-        //UI Update
-        {
-            [self setToolbarItems:@[_playButton,_flexItem, _startRecordingButton,_flexItem, _cropOrDeleteButton] animated:YES];
-            [self.navigationItem setLeftBarButtonItem:_cancelButton animated:YES];
+        Alamofire.upload(
             
-            if ([[NSFileManager defaultManager] fileExistsAtPath:_recordingFilePath])
-            {
-                _playButton.enabled = YES;
-                _cropOrDeleteButton.enabled = YES;
-                _doneButton.enabled = YES;
+            multipartFormData: { multipartFormData in
+                multipartFormData.append(audioFileURL, withName: "AudioFile")
+                multipartFormData.append("106".data(using: String.Encoding.utf8)!, withName: "Sender")
+            },
+            
+             to: "http://win.udocscloud.com:8899/GPS/locsvc/addVoiceMessageFile",
+            encodingCompletion: { encodingResult in
+                switch encodingResult {
+                case .success(let upload, _, _):
+                    upload.responseJSON { response in
+ 
+                        if let result = response.result.value {
+                            let JSON = result as! NSDictionary
+                            let feedback = "\(JSON["Feedback"]!)"
+                            
+                            let toast = Toast(text: feedback)
+                            toast.show()
+                            
+                            
+                        }
+                    }
+                case .failure(let encodingError):
+                    print("failed")
+                    print(encodingError)
+                }
             }
-            else
-            {
-                _playButton.enabled = NO;
-                _cropOrDeleteButton.enabled = NO;
-                _doneButton.enabled = NO;
+        )
+        
+        
+        
+        controller.dismiss(animated: true, completion: { _ in })
+    }
+    
+    func audioRecorderControllerDidCancel(_ controller: IQAudioRecorderViewController) {
+        //Notifying that user has clicked cancel.
+        controller.dismiss(animated: true, completion: { _ in })
+    }
+    
+    
+	var webView: WKWebView?
+
+    
+    func createDirectory(){
+        let fileManager = FileManager.default
+        let paths = (NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true)[0] as NSString).appendingPathComponent("VoiceMessages")
+        if !fileManager.fileExists(atPath: paths){
+            try! fileManager.createDirectory(atPath: paths, withIntermediateDirectories: true, attributes: nil)
+        }else{
+            print("Already dictionary created.")
+        }
+    }
+    
+    func clearAllFilesFromTempDirectory(){
+        
+        let fileManager = FileManager.default
+        
+        do {
+            
+            let tmpFolderUrl = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true).appendingPathComponent("0D670D8B-F01E-43BA-BD95-A71991D029D8-1472-00000180DD5B2D80.m4a")
+            
+            try fileManager.removeItem(at: tmpFolderUrl)
+            
+            
+            let allFiles = try fileManager.contentsOfDirectory(atPath: tmpFolderUrl.absoluteString)
+            
+            for aFile in allFiles {
+                try fileManager.removeItem(at: URL(fileURLWithPath: aFile))
             }
         }
-
-        [[AVAudioSession sharedInstance] setCategory:_oldSessionCategory error:nil];
-        [UIApplication sharedApplication].idleTimerDisabled = _wasIdleTimerDisabled;
+        catch let error as NSError {
+            print("Ooops! Something went wrong: \(error)")
+        }
     }
-    else
-    {
-        [[NSFileManager defaultManager] removeItemAtPath:_recordingFilePath error:nil];
-    }
-}
-
-- (void)audioRecorderEncodeErrorDidOccur:(AVAudioRecorder *)recorder error:(NSError *)error
-{
-    //    NSLog(@"%@: %@",NSStringFromSelector(_cmd),error);
-}
-
-
-#pragma mark - Cancel or Done
-
--(void)cancelAction:(UIBarButtonItem*)item
-{
-    /*
-    if ([self.delegate respondsToSelector:@selector(audioRecorderControllerDidCancel:)])
-    {
-        [self.delegate audioRecorderControllerDidCancel:self];
-    }
-    else
-    {
-        [self dismissViewControllerAnimated:YES completion:nil];
-    }*/
-    [self cancel];
-}
-
-- (void) cancel{
-    if ([self.delegate respondsToSelector:@selector(audioRecorderControllerDidCancel:)])
-    {
-        [self.delegate audioRecorderControllerDidCancel:self];
-    }
-    else
-    {
-        [self dismissViewControllerAnimated:YES completion:nil];
-    }
-}
-
-
--(void)doneAction:(UIBarButtonItem*)item
-{
-    /*
-    if ([self.delegate respondsToSelector:@selector(audioRecorderController:didFinishWithAudioAtPath:)])
-    {
-        [self.delegate audioRecorderController:self didFinishWithAudioAtPath:_recordingFilePath];
-    }
-    else
-    {
-        [self dismissViewControllerAnimated:YES completion:nil];
-    }
-     */
-    [self done];
-}
-
--(void) done{
-    if ([self.delegate respondsToSelector:@selector(audioRecorderController:didFinishWithAudioAtPath:)])
-    {
-        [self.delegate audioRecorderController:self didFinishWithAudioAtPath:_recordingFilePath];
-    }
-    else
-    {
-        [self dismissViewControllerAnimated:YES completion:nil];
-    }
-}
-
-#pragma mark - Crop Audio
-
--(void)cropAction:(UIBarButtonItem*)item
-{
-    IQAudioCropperViewController *controller = [[IQAudioCropperViewController alloc] initWithFilePath:_recordingFilePath];
-    controller.delegate = self;
-    controller.barStyle = self.barStyle;
-    controller.normalTintColor = self.normalTintColor;
-    controller.highlightedTintColor = self.highlightedTintColor;
     
-    if (self.blurrEnabled)
-    {
-        [self presentBlurredAudioCropperViewControllerAnimated:controller];
-    }
-    else
-    {
-        [self presentAudioCropperViewControllerAnimated:controller];
-    }
-}
-
--(void)audioCropperController:(IQAudioCropperViewController *)controller didFinishWithAudioAtPath:(NSString *)filePath
-{
-    _recordingFilePath = filePath;
-    NSURL *audioFileURL = [NSURL fileURLWithPath:_recordingFilePath];
-    
-    AVURLAsset* audioAsset = [AVURLAsset URLAssetWithURL:audioFileURL options:nil];
-    CMTime audioDuration = audioAsset.duration;
-    self.navigationItem.title = [NSString timeStringForTimeInterval:CMTimeGetSeconds(audioDuration)];
-}
-
--(void)audioCropperControllerDidCancel:(IQAudioCropperViewController *)controller
-{
-    [self dismissViewControllerAnimated:YES completion:nil];
-}
-
-#pragma mark - Delete Audio
-
--(void)deleteAction:(UIBarButtonItem*)item
-{
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:nil message:nil preferredStyle:UIAlertControllerStyleActionSheet];
-    
-    UIAlertAction *action1 = [UIAlertAction actionWithTitle:@"Delete Recording"
-                                                      style:UIAlertActionStyleDestructive
-                                                    handler:^(UIAlertAction *action){
-
-                                                        [[NSFileManager defaultManager] removeItemAtPath:_recordingFilePath error:nil];
-                                                        
-                                                        _playButton.enabled = NO;
-                                                        _cropOrDeleteButton.enabled = NO;
-                                                        _doneButton.enabled = NO;
-                                                        self.navigationItem.title = _navigationTitle;
-                                                    }];
-    
-    UIAlertAction *action2 = [UIAlertAction actionWithTitle:@"Cancel"
-                                                      style:UIAlertActionStyleCancel
-                                                    handler:nil];
-    
-    [alert addAction:action1];
-    [alert addAction:action2];
-    alert.popoverPresentationController.barButtonItem = item;
-    [self presentViewController:alert animated:YES completion:nil];
-}
-
-#pragma mark - Message Display View
-
--(void)messageDisplayViewDidTapOnButton:(IQMessageDisplayView *)displayView
-{
-    [[UIApplication sharedApplication] openURL:[NSURL URLWithString:UIApplicationOpenSettingsURLString]];
-}
-
-#pragma mark - Private helper
-
--(void)updateUI
-{
-
-}
-
--(void)showNavigationButton:(BOOL)show
-{
-    if (show)
-    {
-        [self.navigationItem setLeftBarButtonItem:_cancelButton animated:YES];
-        [self.navigationItem setRightBarButtonItem:_doneButton animated:YES];
-    }
-    else
-    {
-        [self.navigationItem setLeftBarButtonItem:nil animated:YES];
-        [self.navigationItem setRightBarButtonItem:nil animated:YES];
-    }
-}
-
-- (void)validateMicrophoneAccess
-{
-    AVAudioSession *session = [AVAudioSession sharedInstance];
-    
-    [session requestRecordPermission:^(BOOL granted) {
+	required init(coder aDecoder: NSCoder) {
         
-        dispatch_async(dispatch_get_main_queue(), ^{
+        self.webView = WKWebView(
+            frame: CGRect.zero
             
-            viewMicrophoneDenied.alpha = !granted;
-            musicFlowView.alpha = granted;
-            _startRecordingButton.enabled = granted;
-        });
-    }];
+        )
+
+        voiceMsgPlayQueue = [""]
+		super.init(coder: aDecoder)!
+	}
+
+    
+	@IBOutlet var containerView: UIView!
+
+    
+    
+    private func webView(webView: WKWebView, didReceiveAuthenticationChallenge challenge: URLAuthenticationChallenge,
+                 completionHandler: (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        let cred = URLCredential.init(trust: challenge.protectionSpace.serverTrust!)
+        completionHandler(.useCredential, cred)
+    }
+    
+     let audioPlayer = try!AudioPlayer(fileName:"arpeggio.mp3")
+    
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        if(message.name == "callbackHandler") {
+            //print("JavaScript is sending a message \(message.body)")
+            
+            let actionRequest = "\(message.body)"
+            
+            let actionRequestAry = actionRequest.components(separatedBy: "|")
+            
+            let actionName = actionRequestAry[0]
+            
+            switch actionName {
+            case "StartRecording":
+                triggerVoicRecord()
+                
+            case "NewMsgArrivedAlert":
+                self.audioPlayer.play()
+                break
+            case "PlayVoiceMsg":
+                let voiceFileNames = actionRequestAry[1]
+                
+                if(!voiceFileNames.isEmpty)
+                {
+                    let voiceFilesAry = voiceFileNames.components(separatedBy: ",")
+                    
+                    
+                    for voiceFile in voiceFilesAry{
+                        self.playMsg(voiceFile: voiceFile)
+                    }
+                    /*
+                    self.voiceMsgPlayQueue.append(contentsOf: voiceFilesAry)
+                    
+                    if(!self.isPlayingVoiceMsg){
+                        startPlayingVoiceMsg()
+                    }
+                    */
+                }
+            case "PrintPDF":
+                let pdfUrl = "\(urlBase)/countersolution/\(actionRequestAry[1])"
+                
+                if let url = NSURL(string: pdfUrl) {
+                    if (UIPrintInteractionController.canPrint(url as URL)) {
+                        showPrintInteraction(url: url)
+                    } else {
+                        
+                    }
+                }
+            case "PrintLabelTestingLabel":
+                let paramsAry = actionRequestAry[1].components(separatedBy: ",")
+                
+                let printerIp = paramsAry[0]
+                let jobNumber = paramsAry[1]
+                let mix = paramsAry[2]
+                let strength = paramsAry[3]
+                let agg = paramsAry[4]
+                let slump = paramsAry[5]
+                let docket = paramsAry[6]
+                self.printLabelTestingLabel(printerIp: printerIp, jobNumber: jobNumber, mix: mix, strength: strength, agg: agg, slump: slump, docket: docket)
+                
+            case "PrintLabelProgressiveLabel":
+                let paramsAry = actionRequestAry[1].components(separatedBy: ",")
+                
+                let printerIp = paramsAry[0]
+                let jobNumber = paramsAry[1]
+                let customer = paramsAry[2]
+                let qtyDel = paramsAry[3]
+                let progTotal = paramsAry[4]
+                let docket = paramsAry[5]
+                self.printLabelProgressvieLabel(printerIp: printerIp, jobNumber: jobNumber, customer: customer, qtyDel: qtyDel, progTotal: progTotal, docket: docket)
+                
+            case "PrintLabelCODLabel":
+                let paramsAry = actionRequestAry[1].components(separatedBy: ",")
+                
+                let printerIp = paramsAry[0]
+                let jobNumber = paramsAry[1]
+                let customer = paramsAry[2]
+                let account = paramsAry[3]
+                let amountDue = paramsAry[4]
+                let docket = paramsAry[5]
+                self.printLabelCODLabel(printerIp: printerIp, jobNumber: jobNumber, customer: customer, account: account, amountDue: amountDue, docket: docket)
+                
+                
+            default:
+                triggerVoicRecord()
+            }
+        }
+    }
+    
+    
+    
+    func showPrintInteraction(url: NSURL) {
+        if let controller:UIPrintInteractionController = UIPrintInteractionController.shared {
+            controller.printingItem = url
+            controller.printInfo = printerInfo(jobName: url.lastPathComponent!)
+            controller.present(animated: true, completionHandler: nil)
+        }
+    }
+    
+    func printerInfo(jobName: String) -> UIPrintInfo {
+        let printInfo = UIPrintInfo.printInfo()
+        printInfo.outputType = .general
+        printInfo.jobName = jobName
+        return printInfo
+    }
+    
+    var voiceMsgPlayQueue : [String]
+    var avPlayer: AVPlayer!
+    var currentVoiceMsgIdx = 0
+    var isPlayingVoiceMsg = false
+
+    
+    func startPlayingVoiceMsg(){
+        let voiceFile = self.voiceMsgPlayQueue[self.currentVoiceMsgIdx]
+        self.playMsg(voiceFile: voiceFile)
+    }
+    
+    
+    func playMsg(voiceFile:String){
+        
+        let voiceUrl = "\(self.urlBase)/GPS/sound_clips/\(voiceFile)"
+        
+        let url = URL(string: voiceUrl)
+        avPlayer = AVPlayer(url: url!)
+        avPlayer.actionAtItemEnd = .none
+        
+        let asset = AVURLAsset(url: url!, options: nil)
+        let audioDuration = asset.duration
+        let audioDurationSeconds = CMTimeGetSeconds(audioDuration)
+        
+        
+        let murmur = Murmur(title: "This is a small whistle...")
+      
+ 
+        
+        // Hide a message
+        hide(whistleAfter: 3)
+        
+        
+        //self.view.makeToast("Playing voice message ...", duration: audioDurationSeconds, position: CSToastPositionBottom)
+        
+        let toast = Toast(text: "Playing voice message ...")
+        toast.show()
+        
+        
+        NotificationCenter.default.addObserver(self, selector: #selector(self.playerItemDidReachEnd), name: NSNotification.Name.AVPlayerItemDidPlayToEndTime, object: avPlayer.currentItem)
+        avPlayer.play()
+        
+        
+    }
+    
+    func playerItemDidReachEnd(_ notification: Notification) {
+       /*
+        let nextIdx = self.currentVoiceMsgIdx+1
+        
+        if(nextIdx == self.voiceMsgPlayQueue.count){
+            return
+        }
+        
+        self.currentVoiceMsgIdx = nextIdx
+        
+        self.startPlayingVoiceMsg()
+         */
+        
+        
+    }
+
+    
+    
+    
+	override func viewDidLoad() {
+		super.viewDidLoad()
+        
+       
+        
+        
+        
+        //--# Below line is to enable the alarm to be played with sound although user has muted the phone.
+        try!AVAudioSession.sharedInstance().setCategory(AVAudioSessionCategoryPlayback)
+        
+        
+        let contentController = WKUserContentController();
+        contentController.add(
+            self as WKScriptMessageHandler,
+            name: "callbackHandler"
+        )
+        
+        let config = WKWebViewConfiguration()
+        config.userContentController = contentController
+        
+        
+        self.webView = WKWebView(
+            frame: CGRect.zero,
+            configuration: config
+        )
+        
+        
+        
+        
+
+        self.webView?.navigationDelegate = self
+        
+        createDirectory();
+        
+		self.containerView.addSubview(webView!)
+        
+		self.webView?.translatesAutoresizingMaskIntoConstraints = false
+		let height = NSLayoutConstraint(item: webView!, attribute: .height, relatedBy: .equal, toItem: containerView, attribute: .height, multiplier: 1, constant: 0)
+		let width = NSLayoutConstraint(item: webView!, attribute: .width, relatedBy: .equal, toItem: containerView, attribute: .width, multiplier: 1, constant: 0)
+		view.addConstraints([height, width])
+
+        self.webView?.scrollView.isScrollEnabled = false
+        
+        let url = URL(string: "\(self.urlBase)")
+        
+        let toast = Toast(text: "\(self.urlBase)")
+        toast.show()
+        
+		let request = URLRequest(url: url! )
+        
+
+		self.webView!.load(request)
+        
+        
+         self.addTwoFingerSwipeGesture()
+
+		/*
+        let btnVoice = UIButton (frame: CGRect(x: 0, y: 0, width: 50, height: 50))
+		btnVoice.setTitle("M", for: UIControlState())
+        btnVoice.backgroundColor = UIColor.black
+		self.webView?.addSubview(btnVoice)
+
+        btnVoice.addTarget(self, action: #selector(self.onVoiceTouchUpInside), for: UIControlEvents.touchUpInside)
+         */
+        
+       
+	}
+
+    
+    func addTwoFingerSwipeGesture() {
+        let gesture = UISwipeGestureRecognizer(target: self, action: "handleTwoFingerSwipe")
+        gesture.direction = .left
+        gesture.numberOfTouchesRequired = 2 // 2 finger swipe
+        self.webView?.scrollView.addGestureRecognizer(gesture)
+    }
+    
+    func handleTwoFingerSwipe() {
+        print("2 finger swipe recognized")
+        self.udocs_toggle_navbar()
+    }
+    
+    
+    func gestureRecognizer(gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWithGestureRecognizer otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        return true
+    }
+    
+
+    func triggerVoicRecord(){
+        let recordController : IQAudioRecorderViewController = IQAudioRecorderViewController()
+        recordController.delegate = self
+        recordController.title = "Record voice message, when finished press [Done] to send to the Barro HQ."
+        recordController.maximumRecordDuration = -1
+        recordController.allowCropping = true
+        recordController.barStyle = .black
+        recordController.sampleRate = CGFloat(16000.0)
+        recordController.audioFormat = IQAudioFormat._m4a
+        
+        
+        self.presentBlurredAudioRecorderViewControllerAnimated(recordController)
+
+    }
+    
+    func onVoiceTouchUpInside(){
+        clearAllFilesFromTempDirectory()
+        
+       triggerVoicRecord()
+    }
+    
+    
+	override func didReceiveMemoryWarning() {
+		super.didReceiveMemoryWarning()
+		// Dispose of any resources that can be recreated.
+	}
+    
+    
+    
+    
+    //--# COD Label
+    func printLabelCODLabel(
+        printerIp:String,
+        jobNumber:String,
+        customer:String,
+        account:String,
+        amountDue:String,
+        docket:String
+        ){
+        
+        var labelView: LabelCODLabelView?
+        
+        let viewArray = Bundle.main.loadNibNamed("LabelCODLabel", owner: self, options: nil)
+        
+        for _view in viewArray! {
+            if  _view is LabelCODLabelView{
+                labelView = _view as? LabelCODLabelView;
+                break;
+            }
+        }
+        
+        if(labelView == nil){
+            return;
+        }
+        
+        labelView?.customer.text = customer
+        labelView?.account.text = account
+        labelView?.job.text = jobNumber
+        labelView?.amountDue.text = amountDue
+        labelView?.invDocket.text = docket
+        
+        let date = Date()
+        let formatterDate = DateFormatter()
+        formatterDate.dateFormat = "dd/MM/yyyy"
+        
+        
+        labelView?.my_date.text = formatterDate.string(from: date)
+        
+        let formatterTime = DateFormatter()
+        formatterTime.dateFormat = "hh:mm a."
+        labelView?.my_time.text = formatterTime.string(from: date)
+        
+        
+        
+        
+        let printInfo = BRPtouchPrintInfo()
+        //
+        printInfo.strPaperName = "62mm x 100mm"; //"62mm x 100mm";
+        printInfo.nPrintMode = PRINT_FIT;
+        printInfo.nDensity = 0;
+        printInfo.nOrientation = ORI_PORTRATE;
+        printInfo.nHalftone = HALFTONE_BINARY;
+        printInfo.nHorizontalAlign = ALIGN_LEFT;
+        printInfo.nVerticalAlign = ALIGN_TOP;
+        printInfo.nPaperAlign = PAPERALIGN_LEFT;
+        printInfo.nAutoCutFlag = 1;
+        printInfo.nAutoCutCopies = 1;
+        
+        //
+        
+        
+        let ptp = BRPtouchPrinter(printerName: "Brother QL-720NW")
+        ptp?.setIPAddress(printerIp)
+        
+        
+        ptp?.setPrintInfo(printInfo)
+        
+        let _labView = labelView!
+        let imgRef = _labView.toLargeImage().cgImage
+        
+        let res = ptp?.print(imgRef, copy: 1, timeout: 500)
+        print( String(format: "print res = %d", res!))
+    }
+
+    
+    
+    //--# ProgressiveLabel
+    func printLabelProgressvieLabel(
+        printerIp:String,
+        jobNumber:String,
+        customer:String,
+        qtyDel:String,
+        progTotal:String,
+        docket:String
+        ){
+        
+        var labelView: LabelProgressiveLabelView?
+        
+        let viewArray = Bundle.main.loadNibNamed("LabelProgressiveLabel", owner: self, options: nil)
+        
+        for _view in viewArray! {
+            if  _view is LabelProgressiveLabelView{
+                labelView = _view as? LabelProgressiveLabelView;
+                break;
+            }
+        }
+        
+        if(labelView == nil){
+            return;
+        }
+        
+        labelView?.customer.text = customer
+        labelView?.qty_del.text = qtyDel
+        labelView?.job.text = jobNumber
+        labelView?.prog_total.text = progTotal
+        labelView?.invDocket.text = docket
+        
+        let date = Date()
+        let formatterDate = DateFormatter()
+        formatterDate.dateFormat = "dd/MM/yyyy"
+        
+        
+        labelView?.my_date.text = formatterDate.string(from: date)
+        
+        let formatterTime = DateFormatter()
+        formatterTime.dateFormat = "hh:mm a."
+        labelView?.my_time.text = formatterTime.string(from: date)
+        
+        
+        
+        
+        let printInfo = BRPtouchPrintInfo()
+        //
+        printInfo.strPaperName = "62mm x 100mm"; //"62mm x 100mm";
+        printInfo.nPrintMode = PRINT_FIT;
+        printInfo.nDensity = 0;
+        printInfo.nOrientation = ORI_PORTRATE;
+        printInfo.nHalftone = HALFTONE_BINARY;
+        printInfo.nHorizontalAlign = ALIGN_LEFT;
+        printInfo.nVerticalAlign = ALIGN_TOP;
+        printInfo.nPaperAlign = PAPERALIGN_LEFT;
+        printInfo.nAutoCutFlag = 1;
+        printInfo.nAutoCutCopies = 1;
+        
+        //
+        
+        
+        let ptp = BRPtouchPrinter(printerName: "Brother QL-720NW")
+        ptp?.setIPAddress(printerIp)
+        
+        
+        ptp?.setPrintInfo(printInfo)
+        
+        let _labView = labelView!
+        let imgRef = _labView.toLargeImage().cgImage
+        
+        let res = ptp?.print(imgRef, copy: 1, timeout: 500)
+        print( String(format: "print res = %d", res!))
+    }
+
+    
+    //---# testing slip
+    func printLabelTestingLabel(
+        printerIp:String,
+        jobNumber:String,
+        mix:String,
+        strength:String,
+        agg:String,
+        slump:String,
+        docket:String
+        ){
+    
+        var labelView: LabelTestingLabelView?
+        
+        let viewArray = Bundle.main.loadNibNamed("LabelTestingLabel", owner: self, options: nil)
+        
+        for _view in viewArray! {
+            if  _view is LabelTestingLabelView{
+                labelView = _view as? LabelTestingLabelView;
+                break;
+            }
+        }
+        
+        if(labelView == nil){
+            return;
+        }
+        
+        labelView?.mix.text = mix
+        labelView?.agg.text = agg
+        labelView?.job.text = jobNumber
+        labelView?.strength.text = strength
+        labelView?.slump.text = slump
+        labelView?.invDocket.text = docket
+        
+        let date = Date()
+        let formatterDate = DateFormatter()
+        formatterDate.dateFormat = "dd/MM/yyyy"
+        
+        
+        labelView?.my_date.text = formatterDate.string(from: date)
+        
+        let formatterTime = DateFormatter()
+        formatterTime.dateFormat = "hh:mm a."
+        labelView?.my_time.text = formatterTime.string(from: date)
+        
+        
+        
+        
+        let printInfo = BRPtouchPrintInfo()
+        //
+        printInfo.strPaperName = "62mm x 100mm"; //"62mm x 100mm";
+        printInfo.nPrintMode = PRINT_FIT;
+        printInfo.nDensity = 0;
+        printInfo.nOrientation = ORI_PORTRATE;
+        printInfo.nHalftone = HALFTONE_BINARY;
+        printInfo.nHorizontalAlign = ALIGN_LEFT;
+        printInfo.nVerticalAlign = ALIGN_TOP;
+        printInfo.nPaperAlign = PAPERALIGN_LEFT;
+        printInfo.nAutoCutFlag = 1;
+        printInfo.nAutoCutCopies = 1;
+        
+        //
+        
+        
+        let ptp = BRPtouchPrinter(printerName: "Brother QL-720NW")
+        ptp?.setIPAddress(printerIp)
+  
+        ptp?.setPrintInfo(printInfo)
+        
+        let _labView = labelView!
+        let imgRef = _labView.toLargeImage().cgImage
+        
+        let res = ptp?.print(imgRef, copy: 1, timeout: 500)
+        print( String(format: "print res = %d", res!))
+    }
+
 }
 
--(void)didBecomeActiveNotification:(NSNotification*)notification
-{
-    [self validateMicrophoneAccess];
-}
-
-
-@end
-
-
-@implementation UIViewController (IQAudioRecorderViewController)
-
-- (void)presentAudioRecorderViewControllerAnimated:(nonnull IQAudioRecorderViewController *)audioRecorderViewController
-{
-    UINavigationController *navigationController = [[UINavigationController alloc] initWithRootViewController:audioRecorderViewController];
-
-    navigationController.toolbarHidden = NO;
-    navigationController.toolbar.translucent = YES;
-    
-    navigationController.navigationBar.translucent = YES;
-
-    audioRecorderViewController.barStyle = audioRecorderViewController.barStyle;        //This line is used to refresh UI of Audio Recorder View Controller
-    [self presentViewController:navigationController animated:YES completion:^{
-    }];
-}
-
-- (void)presentBlurredAudioRecorderViewControllerAnimated:(nonnull IQAudioRecorderViewController *)audioRecorderViewController
-{
-    audioRecorderViewController.blurrEnabled = YES;
-    
-    UINavigationController *navigationController = [[UINavigationController alloc] initWithRootViewController:audioRecorderViewController];
-    
-    navigationController.toolbarHidden = YES;
-    navigationController.toolbar.translucent = YES;
-    [navigationController.toolbar setBackgroundImage:[UIImage new] forToolbarPosition:UIBarPositionAny barMetrics:UIBarMetricsDefault];
-    [navigationController.toolbar setShadowImage:[UIImage new] forToolbarPosition:UIBarPositionAny];
-    
-    navigationController.navigationBar.translucent = YES;
-    [navigationController.navigationBar setBackgroundImage:[UIImage new] forBarMetrics:UIBarMetricsDefault];
-    [navigationController.navigationBar setShadowImage:[UIImage new]];
-    
-    navigationController.modalPresentationStyle = UIModalPresentationOverCurrentContext;
-    navigationController.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
-    
-    audioRecorderViewController.barStyle = audioRecorderViewController.barStyle;        //This line is used to refresh UI of Audio Recorder View Controller
-    [self presentViewController:navigationController animated:YES completion:nil];
-}
-
-@end
